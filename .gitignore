@@ -1,0 +1,13 @@
+echo "__pycache__/
+*.pyc
+*.db
+venv/
+env/
+.DS_Store
+.idea/
+.vscode/" > .gitignore
+
+# Add, commit, and push
+git add .gitignore
+git commit -m "chore: add .gitignore file"
+git push origin main
