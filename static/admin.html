@@ -1,0 +1,365 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Admin (CRUD) — Satellite Tracker</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+        }
+
+        header {
+            padding: 10px 16px;
+            background: #0b132b;
+            color: #fff;
+        }
+
+        main {
+            padding: 16px;
+        }
+
+        h3 {
+            margin-top: 24px;
+        }
+
+        form,
+        .row {
+            margin: 8px 0;
+        }
+
+        input,
+        select,
+        button {
+            padding: 6px 8px;
+            margin-right: 8px;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        th,
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+            text-align: left;
+        }
+
+        .actions button {
+            margin-right: 6px;
+        }
+
+        .small {
+            font-size: 12px;
+            color: #555;
+        }
+
+        .hint {
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h2>Admin (CRUD) — Satellite Tracker</h2>
+    </header>
+    <main>
+        <p class="small">Map is at <a href="/">/</a>. This page demonstrates full CRUD on Satellites and Positions.</p>
+
+        <h3>Satellites</h3>
+        <form id="satForm">
+            <input id="satName" placeholder="Name (e.g., Demo Sat)" required />
+            <input id="satNorad" type="number" placeholder="NORAD ID (integer)" required />
+            <button type="submit">Add Satellite</button>
+        </form>
+        <table id="satTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>NORAD</th>
+                    <th>Name</th>
+                    <th>Positions</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+
+        <h3>Positions</h3>
+        <div class="row">
+            Satellite:
+            <select id="posSatSelect"></select>
+            <span class="hint">Select a satellite to view/add positions.</span>
+        </div>
+        <form id="posForm">
+            <input id="posLat" type="number" step="any" placeholder="Latitude" required />
+            <input id="posLon" type="number" step="any" placeholder="Longitude" required />
+            <input id="posAlt" type="number" step="any" placeholder="Altitude km (optional)" />
+            <input id="posVel" type="number" step="any" placeholder="Speed km/h (optional)" />
+            <input id="posTs" type="number" placeholder="Timestamp (unix, optional)" />
+            <button type="submit">Add Position</button>
+        </form>
+        <table id="posTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Time (local)</th>
+                    <th>Lat</th>
+                    <th>Lon</th>
+                    <th>Alt km</th>
+                    <th>Speed km/h</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </main>
+
+    <script>
+        const $ = (sel, root = document) => root.querySelector(sel);
+        const toLocal = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '-';
+
+        // -------- Satellites --------
+        async function loadSatellites() {
+            const res = await fetch('/api/satellites');
+            const sats = await res.json();
+            renderSatTable(sats);
+            renderPosSatSelect(sats);
+            const sel = $('#posSatSelect');
+            if (!sel.value && sats.length) {
+                const iss = sats.find(s => s.norad_id === 25544) || sats[0];
+                sel.value = iss.id;
+            }
+            loadPositions();
+        }
+
+        function renderSatTable(sats) {
+            const tbody = $('#satTable tbody');
+            tbody.innerHTML = '';
+            sats.forEach(s => {
+                const tr = document.createElement('tr');
+                tr.dataset.id = s.id;
+                tr.innerHTML = `
+          <td>${s.id}</td>
+          <td class="norad">${s.norad_id}</td>
+          <td class="name">${s.name}</td>
+          <td>${s.position_count}</td>
+          <td class="actions">
+            <button class="edit">Edit</button>
+            <button class="delete">Delete</button>
+          </td>
+        `;
+                tbody.appendChild(tr);
+            });
+
+            tbody.onclick = async (e) => {
+                if (e.target.classList.contains('edit')) {
+                    const tr = e.target.closest('tr');
+                    makeSatRowEditable(tr);
+                } else if (e.target.classList.contains('save')) {
+                    const tr = e.target.closest('tr');
+                    await saveSatRow(tr);
+                } else if (e.target.classList.contains('cancel')) {
+                    await loadSatellites();
+                } else if (e.target.classList.contains('delete')) {
+                    const tr = e.target.closest('tr');
+                    const id = tr.dataset.id;
+                    if (confirm('Delete satellite and its positions?')) {
+                        const res = await fetch('/api/satellites/' + id, { method: 'DELETE' });
+                        if (res.ok) {
+                            await loadSatellites();
+                        } else {
+                            const err = await res.json().catch(() => ({}));
+                            alert('Delete failed: ' + (err.error || res.statusText));
+                        }
+                    }
+                }
+            };
+        }
+
+        function makeSatRowEditable(tr) {
+            const noradCell = tr.querySelector('.norad');
+            const nameCell = tr.querySelector('.name');
+            const nVal = noradCell.textContent.trim();
+            const nameVal = nameCell.textContent.trim();
+            noradCell.innerHTML = `<input type="number" value="${nVal}">`;
+            nameCell.innerHTML = `<input value="${nameVal}">`;
+            tr.querySelector('.actions').innerHTML = `
+        <button class="save">Save</button>
+        <button class="cancel">Cancel</button>
+      `;
+        }
+
+        async function saveSatRow(tr) {
+            const id = tr.dataset.id;
+            const norad = tr.querySelector('.norad input').value;
+            const name = tr.querySelector('.name input').value;
+            const res = await fetch('/api/satellites/' + id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ norad_id: norad, name })
+            });
+            if (res.ok) {
+                await loadSatellites();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert('Update failed: ' + (err.error || res.statusText));
+            }
+        }
+
+        function renderPosSatSelect(sats) {
+            const sel = $('#posSatSelect');
+            const cur = sel.value;
+            sel.innerHTML = sats.map(s => `<option value="${s.id}">${s.name} (NORAD ${s.norad_id})</option>`).join('');
+            if (cur) sel.value = cur;
+            sel.onchange = loadPositions;
+        }
+
+        $('#satForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = $('#satName').value.trim();
+            const norad = $('#satNorad').value.trim();
+            if (!name || !norad) return alert('Please fill both name and NORAD ID.');
+            const res = await fetch('/api/satellites', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, norad_id: norad })
+            });
+            if (res.ok) {
+                $('#satName').value = ''; $('#satNorad').value = '';
+                await loadSatellites();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert('Create failed: ' + (err.error || res.statusText));
+            }
+        });
+
+        // -------- Positions --------
+        async function loadPositions() {
+            const satId = $('#posSatSelect').value;
+            if (!satId) return;
+            const res = await fetch('/api/positions?satellite_id=' + satId + '&limit=20');
+            const rows = await res.json();
+            renderPosTable(rows.reverse()); // oldest -> newest
+        }
+
+        function renderPosTable(rows) {
+            const tbody = $('#posTable tbody');
+            tbody.innerHTML = '';
+            rows.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.dataset.id = p.id;
+                tr.innerHTML = `
+          <td>${p.id}</td>
+          <td class="ts" data-ts="${p.timestamp}">${toLocal(p.timestamp)}</td>
+          <td class="lat">${p.latitude}</td>
+          <td class="lon">${p.longitude}</td>
+          <td class="alt">${p.altitude_km ?? ''}</td>
+          <td class="vel">${p.velocity_kmh ?? ''}</td>
+          <td class="actions">
+            <button class="edit">Edit</button>
+            <button class="delete">Delete</button>
+          </td>
+        `;
+                tbody.appendChild(tr);
+            });
+
+            tbody.onclick = async (e) => {
+                if (e.target.classList.contains('edit')) {
+                    const tr = e.target.closest('tr'); makePosRowEditable(tr);
+                } else if (e.target.classList.contains('save')) {
+                    const tr = e.target.closest('tr'); await savePosRow(tr);
+                } else if (e.target.classList.contains('cancel')) {
+                    await loadPositions();
+                } else if (e.target.classList.contains('delete')) {
+                    const tr = e.target.closest('tr');
+                    const id = tr.dataset.id;
+                    if (confirm('Delete this position?')) {
+                        const res = await fetch('/api/positions/' + id, { method: 'DELETE' });
+                        if (res.ok) loadPositions();
+                        else {
+                            const err = await res.json().catch(() => ({}));
+                            alert('Delete failed: ' + (err.error || res.statusText));
+                        }
+                    }
+                }
+            };
+        }
+
+        function makePosRowEditable(tr) {
+            const ts = tr.querySelector('.ts').dataset.ts;
+            const lat = tr.querySelector('.lat').textContent.trim();
+            const lon = tr.querySelector('.lon').textContent.trim();
+            const alt = tr.querySelector('.alt').textContent.trim();
+            const vel = tr.querySelector('.vel').textContent.trim();
+            tr.querySelector('.ts').innerHTML = `<input type="number" value="${ts}">`;
+            tr.querySelector('.lat').innerHTML = `<input type="number" step="any" value="${lat}">`;
+            tr.querySelector('.lon').innerHTML = `<input type="number" step="any" value="${lon}">`;
+            tr.querySelector('.alt').innerHTML = `<input type="number" step="any" value="${alt}">`;
+            tr.querySelector('.vel').innerHTML = `<input type="number" step="any" value="${vel}">`;
+            tr.querySelector('.actions').innerHTML = `
+        <button class="save">Save</button>
+        <button class="cancel">Cancel</button>
+      `;
+        }
+
+        async function savePosRow(tr) {
+            const id = tr.dataset.id;
+            const payload = {
+                timestamp: tr.querySelector('.ts input').value,
+                latitude: tr.querySelector('.lat input').value,
+                longitude: tr.querySelector('.lon input').value,
+                altitude_km: tr.querySelector('.alt input').value,
+                velocity_kmh: tr.querySelector('.vel input').value,
+            };
+            const res = await fetch('/api/positions/' + id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                await loadPositions();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert('Update failed: ' + (err.error || res.statusText));
+            }
+        }
+
+        $('#posForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const satId = $('#posSatSelect').value;
+            const payload = {
+                satellite_id: satId,
+                latitude: $('#posLat').value,
+                longitude: $('#posLon').value,
+                altitude_km: $('#posAlt').value,
+                velocity_kmh: $('#posVel').value,
+                timestamp: $('#posTs').value
+            };
+            const res = await fetch('/api/positions', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                $('#posLat').value = ''; $('#posLon').value = '';
+                $('#posAlt').value = ''; $('#posVel').value = ''; $('#posTs').value = '';
+                await loadPositions();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert('Create failed: ' + (err.error || res.statusText));
+            }
+        });
+
+        // Init
+        loadSatellites();
+    </script>
+</body>
+
+</html>

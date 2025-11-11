@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Real-time Satellite Location (ISS)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            padding: 10px 16px;
+            background: #0b132b;
+            color: #fff;
+        }
+
+        #map {
+            height: 60vh;
+        }
+
+        #panel {
+            padding: 8px 16px;
+        }
+
+        .stat {
+            display: inline-block;
+            margin-right: 16px;
+        }
+
+        #actions {
+            padding: 8px 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        button {
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        th,
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+            text-align: left;
+        }
+
+        thead th {
+            background: #f7f7f7;
+            position: sticky;
+            top: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h2>Real-time Satellite Location: International Space Station (ISS)</h2>
+    </header>
+
+    <div id="map"></div>
+
+    <div id="panel">
+        <span class="stat">Lat: <span id="lat">-</span></span>
+        <span class="stat">Lon: <span id="lon">-</span></span>
+        <span class="stat">Alt: <span id="alt">-</span> km</span>
+        <span class="stat">Speed: <span id="vel">-</span> km/h</span>
+        <span class="stat">Time: <span id="time">-</span></span>
+    </div>
+
+    <div id="actions">
+        <button id="refresh">Refresh table</button>
+        <a href="/api/history.csv?limit=500" target="_blank">Export CSV</a>
+        <span id="total">Collecting data…</span>
+    </div>
+
+    <div style="padding: 0 16px 16px;">
+        <table id="histTable">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Time (local)</th>
+                    <th>Latitude</th>
+                    <th>Longitude</th>
+                    <th>Altitude (km)</th>
+                    <th>Speed (km/h)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script>
+        const map = L.map('map').setView([0, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        let marker = L.marker([0, 0]).addTo(map);
+        let trail = L.polyline([], { color: 'red', weight: 2 }).addTo(map);
+
+        function fmt(n, d = 3) { return Number(n).toFixed(d); }
+        function tsToLocal(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '-'; }
+
+        async function loadHistory(limit = 50) {
+            try {
+                const res = await fetch('/api/history?limit=' + limit);
+                const hist = await res.json();
+                const coords = hist.map(p => [p.latitude, p.longitude]);
+                trail.setLatLngs(coords);
+                if (coords.length) {
+                    map.fitBounds(trail.getBounds(), { padding: [20, 20] });
+                    marker.setLatLng(coords[coords.length - 1]);
+                }
+            } catch (e) { console.error('history error', e); }
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/status');
+                const s = await res.json();
+                document.getElementById('total').textContent =
+                    `Total points: ${s.points || 0}` +
+                    (s.first_timestamp ? ` (from ${tsToLocal(s.first_timestamp)} to ${tsToLocal(s.last_timestamp)})` : '');
+            } catch (e) { console.error('status error', e); }
+        }
+
+        async function renderHistoryTable(limit = 20) {
+            try {
+                const res = await fetch('/api/history?limit=' + limit);
+                const data = await res.json();
+                const tbody = document.querySelector('#histTable tbody');
+                tbody.innerHTML = '';
+                data.forEach((p, i) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+            <td>${i + 1}</td>
+            <td>${tsToLocal(p.timestamp)}</td>
+            <td>${fmt(p.latitude, 3)}</td>
+            <td>${fmt(p.longitude, 3)}</td>
+            <td>${fmt(p.altitude_km ?? 0, 1)}</td>
+            <td>${fmt(p.velocity_kmh ?? 0, 0)}</td>
+          `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) { console.error('table error', e); }
+        }
+
+        async function updatePosition() {
+            try {
+                const res = await fetch('/api/iss');
+                const d = await res.json();
+                const latlng = [d.latitude, d.longitude];
+
+                marker.setLatLng(latlng);
+                trail.addLatLng(latlng);
+
+                document.getElementById('lat').textContent = fmt(d.latitude, 3);
+                document.getElementById('lon').textContent = fmt(d.longitude, 3);
+                document.getElementById('alt').textContent = fmt(d.altitude_km, 1);
+                document.getElementById('vel').textContent = fmt(d.velocity_kmh, 0);
+                document.getElementById('time').textContent = tsToLocal(d.timestamp);
+
+                map.panTo(latlng, { animate: true, duration: 0.5 });
+
+                loadStats();
+                renderHistoryTable(20);
+            } catch (e) { console.error('update error', e); }
+        }
+
+        // Init
+        loadHistory(50);
+        loadStats();
+        renderHistoryTable(20);
+        updatePosition();
+        setInterval(updatePosition, 5000);
+
+        document.getElementById('refresh').addEventListener('click', () => {
+            renderHistoryTable(20);
+            loadStats();
+        });
+    </script>
+</body>
+
+</html>
